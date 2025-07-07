@@ -10,9 +10,10 @@ entity HUC6270 is
 		CLR_MEM	: in std_logic;
 		  
 		CPU_CE	: in std_logic;
-		A			: in std_logic_vector(1 downto 0);
-		DI			: in std_logic_vector(7 downto 0);
-		DO			: out std_logic_vector(7 downto 0);
+		BYTEWORD : in std_logic;								-- 16-bit data = 0; 8-bit data = 1
+		A			: in std_logic_vector(1 downto 0);		-- if 16-bit data, A(0) probably = 0 and should be ignored in any case
+		DI			: in std_logic_vector(15 downto 0);
+		DO			: out std_logic_vector(15 downto 0);
 		CS_N		: in std_logic; 
 		WR_N  	: in std_logic;
 		RD_N  	: in std_logic;
@@ -20,11 +21,11 @@ entity HUC6270 is
 		IRQ_N		: out std_logic;
 		
 		DCK_CE	: in std_logic;
-		DCC		: in std_logic_vector(1 downto 0);
-		HS_F		: in std_logic;
-		HS_R		: in std_logic;
-		VS_F		: in std_logic;
-		VS_R		: in std_logic;
+		DCK_CE_F	: in std_logic;
+		HSYNC_F	: in std_logic;
+		HSYNC_R	: in std_logic;
+		VSYNC_F	: in std_logic;
+		VSYNC_R	: in std_logic;
 		VD			: out std_logic_vector(8 downto 0);
 		BORDER	: out std_logic;
 		GRID		: out std_logic_vector(1 downto 0);
@@ -47,7 +48,7 @@ entity HUC6270 is
 		LENR_DBG 			: out std_logic_vector(15 downto 0);
 		SPR_X_DBG    		: out std_logic_vector(9 downto 0);
 		SPR_Y_DBG    		: out std_logic_vector(9 downto 0);
-		SPR_PC_DBG			: out std_logic_vector(9 downto 0);
+		SPR_PC_DBG			: out std_logic_vector(10 downto 0);
 		SPR_CG_DBG     	: out std_logic;
 		SPR_PAL_DBG			: out std_logic_vector(3 downto 0);
 		SPR_PRIO_DBG		: out std_logic; 
@@ -55,6 +56,7 @@ entity HUC6270 is
 		SPR_CGY_DBG     	: out std_logic_vector(1 downto 0);
 		SPR_HF_DBG     	: out std_logic;
 		SPR_VF_DBG     	: out std_logic;
+		HSW_END_POS_DBG 	: out unsigned(6 downto 0);
 		HDS_END_POS_DBG 	: out unsigned(6 downto 0);
 		HDISP_END_POS_DBG : out unsigned(6 downto 0);
 		HSW_DBG				: out std_logic_vector(4 downto 0);
@@ -126,6 +128,7 @@ architecture rtl of HUC6270 is
 	signal IRQ_VBL			: std_logic;
 	signal IO_BYRL_SET	: std_logic;
 	signal IO_BYRH_SET	: std_logic;
+	signal IO_BYRL_WR,IO_BYRH_WR : std_logic;
 	signal CPU_BUSY		: std_logic;
 	signal CPU_BUSY_CLEAR: std_logic;
 	signal CPURD_PEND 	: std_logic;
@@ -145,6 +148,7 @@ architecture rtl of HUC6270 is
 	signal DMAS_SAT_ADDR	: std_logic_vector(7 downto 0);
 	signal DMAS_VRAM_ADDR: std_logic_vector(15 downto 0);
 	signal DMAS_SAT_WE	: std_logic;
+	signal BXR_SET			: std_logic;
 	signal BYRL_SET		: std_logic;
 	signal BYRH_SET		: std_logic;
 	signal VDISP_OLD		: std_logic;
@@ -156,12 +160,17 @@ architecture rtl of HUC6270 is
 	signal TILE_CNT		: unsigned(6 downto 0);
 	signal DISP_CNT		: unsigned(9 downto 0);
 	signal DISP_CNT_INC 	: std_logic;
+	signal DISP_BREAK 	: std_logic;
+	signal DISP_BREAK_EN	: std_logic;
+	signal DISP_BREAK_LATCH: std_logic;
+	signal TILE_ZERO		: std_logic;
 	signal DOTS_REMAIN	: unsigned(2 downto 0);
 	signal RC_CNT			: unsigned(9 downto 0);
 	signal BURST			: std_logic;
 	signal HSW_END_POS 	: unsigned(6 downto 0);
 	signal HDS_END_POS 	: unsigned(6 downto 0);
 	signal HDISP_END_POS : unsigned(6 downto 0);
+	signal HDE_END_POS 	: unsigned(6 downto 0);
 	signal VDS_END_POS 	: unsigned(9 downto 0);
 	signal VDISP_END_POS : unsigned(9 downto 0);
 	signal VDE_END_POS 	: unsigned(9 downto 0);
@@ -174,6 +183,7 @@ architecture rtl of HUC6270 is
 	signal VDS				: std_logic_vector(7 downto 0);
 	signal VDW				: std_logic_vector(8 downto 0);
 	signal VDE				: std_logic_vector(7 downto 0);
+	signal RES7M			: std_logic_vector(0 downto 0);
 	signal HDISP			: std_logic;
 	signal VDISP			: std_logic;
 	
@@ -215,7 +225,7 @@ architecture rtl of HUC6270 is
 	type Sprite_r is record
 		X    		: std_logic_vector(9 downto 0);
 		Y    		: std_logic_vector(9 downto 0);
-		PC			: std_logic_vector(9 downto 0);
+		PC			: std_logic_vector(10 downto 0);
 		CG     	: std_logic;
 		PAL		: std_logic_vector(3 downto 0);
 		PRIO		: std_logic; 
@@ -238,7 +248,7 @@ architecture rtl of HUC6270 is
 	signal SPR_FIND		: std_logic; 
 	signal SPR_Y			: std_logic_vector(9 downto 0);
 	signal SPR_X			: std_logic_vector(9 downto 0);
-	signal SPR_PC			: std_logic_vector(9 downto 0);
+	signal SPR_PC			: std_logic_vector(10 downto 0);
 	signal SPR_CG    		: std_logic;
 	signal SPR_FETCH_CNT	: unsigned(6 downto 0);
 	signal SPR_FETCH_DONE: std_logic; 
@@ -290,9 +300,12 @@ begin
 			DOT_CNT <= (others=>'0');
 			TILE_CNT <= (others=>'0');
 			DOTS_REMAIN <= (others=>'0');
-			HDW <= (others=>'0');
+			HSW <= (others=>'0');
+			HDW <= "0011111";
 			HDS <= (others=>'0');
+			HDE <= (others=>'0');
 			CM <= '0';
+			RES7M <= "0";
 		elsif rising_edge(CLK) then
 
 			FETCH_CE <= not FETCH_CE;
@@ -309,25 +322,31 @@ begin
 				DOT_CNT <= DOT_CNT + 1;
 				if DOT_CNT = 7 then
 					TILE_CNT <= TILE_CNT + 1;
+					TILE_ZERO <= '0';
 				end if; 
-				if HS_F = '1' then
+				if (TILE_CNT = HDE_END_POS and DOT_CNT = 7) or HSYNC_F = '1' then
 					DOT_CNT <= (others=>'0');
 					TILE_CNT <= (others=>'0');
 					
 					DOTS_REMAIN <= DOT_CNT;
-
-					case DCC is
-						when "00" => HSW <= "00011";
-						when "01" => HSW <= "00100";
-						when others => HSW <= "00011";
-					end case;
-
+					
+					if HSYNC_F = '1' then
+						HSW <= "00011";
+						TILE_ZERO <= '1';
+					else 
+						HSW <= HSR_HSW;
+					end if; 
 					HDS <= HSR_HDS;
 					HDW <= HDR_HDW;
 					HDE <= HDR_HDE;
+					RES7M <= "0";
 
 					CM <= MWR_CM;
 				end if; 
+			end if; 
+			
+			if DCK_CE = '0' and HSYNC_F = '1' then
+				RES7M <= "1";
 			end if; 
 		end if;
 	end process;
@@ -336,17 +355,19 @@ begin
 	SPR_CE   <= DCK_CE  when SP64 = '0' else FETCH_CE;
 	SPR_MAX  <= 15      when SP64 = '0' else 63;
 
-	HSW_END_POS <= "00"&unsigned(HSW);
-	HDS_END_POS <= ("00"&unsigned(HSW)) + 1 + unsigned(HDS);
-	HDISP_END_POS <= ("00"&unsigned(HSW)) + 1 + unsigned(HDS) + 1 + unsigned(HDW);
+	HSW_END_POS <= "00"&unsigned(HSW) + ("000000"&unsigned(RES7M));
+	HDS_END_POS <= ("00"&unsigned(HSW)) + ("000000"&unsigned(RES7M)) + 1 + unsigned(HDS);
+	HDISP_END_POS <= ("00"&unsigned(HSW)) + ("000000"&unsigned(RES7M)) + 1 + unsigned(HDS) + 1 + unsigned(HDW);
+	HDE_END_POS <= ("00"&unsigned(HSW)) + ("000000"&unsigned(RES7M)) + 1 + unsigned(HDS) + 1 + unsigned(HDW) + 1 + unsigned(HDE);
 	
 	VSW_END_POS <= ("00000"&unsigned(VSW));
 	VDS_END_POS <= ("00000"&unsigned(VSW)) + 1 + ("00"&unsigned(VDS)) + 1;
 	VDISP_END_POS <= ("00000"&unsigned(VSW)) + 1 + ("00"&unsigned(VDS)) + 2 + ("0"&unsigned(VDW));
 	VDE_END_POS <= ("00000"&unsigned(VSW)) + 1 + ("00"&unsigned(VDS)) + 2 + ("0"&unsigned(VDW)) + 1 + ("00"&unsigned(VDE)) - 1;
 	
-
+	DISP_BREAK <= '1' when DISP_CNT_INC = '1' and HSYNC_F = '1' else '0';
 	process(CLK, RST_N)
+	variable RC_CNT_UPDATED : std_logic;
 	begin
 		if RST_N = '0' then
 			DISP_CNT <= (others=>'0');
@@ -356,6 +377,7 @@ begin
 			BG_FETCH <= '0';
 			BG_OUT <= '0';
 			RC_CNT <= "00"&x"40";
+			RC_CNT_UPDATED := '0';
 			
 			VSW <= (others=>'0');
 			VDS <= (others=>'0');
@@ -368,7 +390,7 @@ begin
 			SB <= '0';
 		elsif rising_edge(CLK) then
 			if DCK_CE = '1' then
-				if VS_F = '1' then
+				if VSYNC_F = '1' then
 					VDISP <= '0';
 					DISP_CNT <= (others=>'0');
 					VSW <= VPR_VSW;
@@ -379,10 +401,17 @@ begin
 					SM <= MWR_SM;
 					SCREEN <= MWR_SCREEN;
 				else
+					if DOT_CNT = 7 then
+						DISP_BREAK_LATCH <= '0';
+					end if;
 					if TILE_CNT = HSW_END_POS and DOT_CNT = 7 then
 						DISP_CNT_INC <= '1';
+						DISP_BREAK_EN <= '1';
 					end if;
-					if (TILE_CNT = HDISP_END_POS and DOT_CNT = 7 and DISP_CNT_INC = '1') or (HS_F = '1' and DISP_CNT_INC = '1') then
+					if TILE_CNT = HDISP_END_POS and DOT_CNT = 7 then
+						DISP_BREAK_EN <= '0';
+					end if;
+					if DISP_BREAK = '1' then--(TILE_CNT = HDE_END_POS and DOT_CNT = 7 and DISP_CNT_INC = '1') or 
 						DISP_CNT <= DISP_CNT + 1;
 						DISP_CNT_INC <= '0';
 						if DISP_CNT = VSW_END_POS then
@@ -404,41 +433,50 @@ begin
 							SM <= MWR_SM;
 							SCREEN <= MWR_SCREEN;
 						end if;
+						
+						DISP_BREAK_LATCH <= DISP_BREAK_EN;
+						DISP_BREAK_EN <= '0';
 					end if;
 				end if;
 
 				
-				if DOT_CNT = 7 then
-					if TILE_CNT = HDS_END_POS - 2 and DISP_CNT > VDS_END_POS and DISP_CNT <= VDISP_END_POS then
-						BG_FETCH <= '1';
-					elsif TILE_CNT = HDISP_END_POS then
-						BG_FETCH <= '0';
-					end if;
-					
-					if TILE_CNT = HDS_END_POS and DISP_CNT > VDS_END_POS and DISP_CNT <= VDISP_END_POS then
-						BG_OUT <= '1';
-					elsif TILE_CNT = HDISP_END_POS then
-						BG_OUT <= '0';
-					end if;
-	
-					if TILE_CNT = HDISP_END_POS and DISP_CNT = VDS_END_POS - 1 then
+				if TILE_CNT = HDS_END_POS - 2 and DOT_CNT = 7 and DISP_CNT > VDS_END_POS and DISP_CNT <= VDISP_END_POS then
+					BG_FETCH <= '1';
+				elsif (TILE_CNT = HDISP_END_POS and DOT_CNT = 7) or (TILE_CNT = 0 and DOT_CNT = 7 and DISP_BREAK_LATCH = '1') then
+					BG_FETCH <= '0';
+				end if;
+				
+				if TILE_CNT = HDS_END_POS and DOT_CNT = 7 and DISP_CNT > VDS_END_POS and DISP_CNT <= VDISP_END_POS then
+					BG_OUT <= '1';
+				elsif (TILE_CNT = HDISP_END_POS and DOT_CNT = 7) or (TILE_CNT = 0 and DOT_CNT = 7 and DISP_BREAK_LATCH = '1') then
+					BG_OUT <= '0';
+				end if;
+
+				if (TILE_CNT = HDISP_END_POS and DOT_CNT = 7) or (DISP_BREAK = '1' and RC_CNT_UPDATED = '0') then
+					if DISP_CNT = VDS_END_POS - 1 then
 						RC_CNT <= "00"&x"40";
-					elsif TILE_CNT = HDISP_END_POS then
+					else
 						RC_CNT <= RC_CNT + 1;
 					end if; 
-					
-					if TILE_CNT = HDS_END_POS - 3 then
-						BB <= CR_BB;
-						SB <= CR_SB;
-					end if;
+				end if;
+				if DISP_BREAK = '1' then
+					RC_CNT_UPDATED := '0';
+				end if;
+				if TILE_CNT = HDISP_END_POS and DOT_CNT = 7 then
+					RC_CNT_UPDATED := '1';
+				end if;
+				
+				if TILE_CNT = HDS_END_POS - 3 and DOT_CNT = 6 then
+					BB <= CR_BB;
+					SB <= CR_SB;
 				end if;
 			end if; 
 		end if;
 	end process;
 	
-	process(DOT_CNT, FDOT_CNT, DOTS_REMAIN, TILE_CNT, BURST, DMAS_EXEC, DMA_EXEC, BG_FETCH, SPR_FETCH, SPR_FETCH_EN, VM, CM, SM, SPR, BB, SP64 )
+	process(DOT_CNT, FDOT_CNT, DOTS_REMAIN, TILE_ZERO, TILE_CNT, BURST, DMAS_EXEC, DMA_EXEC, BG_FETCH, SPR_FETCH, SPR_FETCH_EN, VM, CM, SM, SPR, BB, SP64)
 	begin
-		if TILE_CNT = 0 and DOT_CNT <= DOTS_REMAIN and SP64 = '0' then
+		if TILE_ZERO = '1' and DOT_CNT <= DOTS_REMAIN and SP64 = '0' then
 			--first several cycles in HSYNC are empty, i.e. without access the memory, N=dots%8
 			SLOT <= NOP;
 		elsif DMAS_EXEC = '1' then
@@ -670,7 +708,7 @@ begin
 					BG_X <= BG_X + 8;
 				end if; 
 				
-				if HS_R = '1' then
+				if TILE_CNT = HDS_END_POS - 2 and DOT_CNT = 7 then
 					BG_X <= (others=>'0');
 				end if; 
 				
@@ -685,7 +723,7 @@ begin
 					OFS_Y <= NEW_OFS_Y + 1;
 				end if; 
 				
-				if TILE_CNT = HDS_END_POS - 3 and DOT_CNT = 7 then
+				if BXR_SET = '1' then
 					OFS_X <= unsigned(BXR);
 				end if; 
 			end if; 
@@ -723,25 +761,25 @@ begin
 		SPR_OFS_Y := RC_CNT(5 downto 0) - unsigned(SPR.Y(5 downto 0)) - 1;
 		SPR_LINE := SPR_OFS_Y xor (5 downto 0 => SPR.VF);
 		if SPR.CGX = '0' then
-			SPR_TILE_N(0) := SPR.PC(0);
+			SPR_TILE_N(0) := SPR.PC(1);
 		else
 			SPR_TILE_N(0) := SPR_FETCH_W xor SPR.HF;
 		end if;
 		case SPR.CGY is
-			when "00" =>   SPR_TILE_N(2 downto 1) := SPR.PC(2 downto 1);
-			when "01" =>   SPR_TILE_N(2 downto 1) := SPR.PC(2)   & SPR_LINE(4);
+			when "00" =>   SPR_TILE_N(2 downto 1) := SPR.PC(3 downto 2);
+			when "01" =>   SPR_TILE_N(2 downto 1) := SPR.PC(3)   & SPR_LINE(4);
 			when others => SPR_TILE_N(2 downto 1) := SPR_LINE(5) & SPR_LINE(4);
 		end case;
 		
 		case SLOT is
 			when SG0 =>
-				SPR_RAM_ADDR <= SPR.PC(9 downto 3) & SPR_TILE_N & "00" & std_logic_vector(SPR_LINE(3 downto 0));
+				SPR_RAM_ADDR <= SPR.PC(10 downto 4) & SPR_TILE_N & "00" & std_logic_vector(SPR_LINE(3 downto 0));
 			when SG1 =>
-				SPR_RAM_ADDR <= SPR.PC(9 downto 3) & SPR_TILE_N & "01" & std_logic_vector(SPR_LINE(3 downto 0));
+				SPR_RAM_ADDR <= SPR.PC(10 downto 4) & SPR_TILE_N & "01" & std_logic_vector(SPR_LINE(3 downto 0));
 			when SG2 =>
-				SPR_RAM_ADDR <= SPR.PC(9 downto 3) & SPR_TILE_N & "10" & std_logic_vector(SPR_LINE(3 downto 0));
+				SPR_RAM_ADDR <= SPR.PC(10 downto 4) & SPR_TILE_N & "10" & std_logic_vector(SPR_LINE(3 downto 0));
 			when SG3 =>
-				SPR_RAM_ADDR <= SPR.PC(9 downto 3) & SPR_TILE_N & "11" & std_logic_vector(SPR_LINE(3 downto 0));
+				SPR_RAM_ADDR <= SPR.PC(10 downto 4) & SPR_TILE_N & "11" & std_logic_vector(SPR_LINE(3 downto 0));
 			when others =>
 				SPR_RAM_ADDR <= (others=>'0');
 		end case;
@@ -780,24 +818,25 @@ begin
 		elsif rising_edge(CLK) then
 			SPR_TILE_SAVE <= '0';
 			if DCK_CE = '1' then
-				if TILE_CNT = HDS_END_POS - 2 and DOT_CNT = 7 and DISP_CNT >= VDS_END_POS and DISP_CNT < VDISP_END_POS then
+				if TILE_CNT = HDS_END_POS and DOT_CNT = 3 and DISP_CNT >= VDS_END_POS and DISP_CNT < VDISP_END_POS then
 					SPR_EVAL <= '1';
 					SPR_EVAL_X <= (others=>'0');
 					SPR_EVAL_CNT <= (others=>'0');
 					SPR_EVAL_DONE <= '0';
 					SPR_EVAL_FULL <= '0';
 					SPR_FIND <= '0';
-				elsif TILE_CNT = HDISP_END_POS and DOT_CNT = 7 then
+				elsif (DOT_CNT = 7 and TILE_CNT = HDISP_END_POS) or (DOT_CNT = 7 and TILE_CNT = 0 and DISP_BREAK_LATCH = '1') then
 					SPR_EVAL <= '0';
 				end if;
 				
-				if TILE_CNT = HDISP_END_POS and DOT_CNT = 7 and DISP_CNT >= VDS_END_POS and DISP_CNT < VDISP_END_POS then
+				if ((DOT_CNT = 7 and TILE_CNT = HDISP_END_POS                and DISP_CNT >= VDS_END_POS and DISP_CNT <  VDISP_END_POS) or 
+				    (DOT_CNT = 7 and TILE_CNT = 0 and DISP_BREAK_LATCH = '1' and DISP_CNT >  VDS_END_POS and DISP_CNT <= VDISP_END_POS)) and SPR_FETCH = '0' then
 					SPR_FETCH <= '1';
 					SPR_FETCH_EN <= CR_SB and SPR_FIND;
 					SPR_FETCH_CNT <= (others=>'0');
 					SPR_FETCH_W <= '0';
 					SPR_FETCH_DONE <= '0';
-				elsif TILE_CNT = HDS_END_POS - 2 and DOT_CNT = 7 and DISP_CNT > VDS_END_POS and DISP_CNT <= VDISP_END_POS then
+				elsif TILE_CNT = HDS_END_POS - 2 and DOT_CNT = 7 then
 					SPR_FETCH <= '0';
 				end if;
 
@@ -810,7 +849,7 @@ begin
 								SPR_X <= SAT_Q(9 downto 0);
 							when "10" =>
 								SPR_CG <= SAT_Q(0);
-								SPR_PC <= SAT_Q(10 downto 1);
+								SPR_PC <= SAT_Q(10 downto 0);
 							when others =>
 								SPR_H := SAT_Q(13)&(SAT_Q(13) or SAT_Q(12))&"1111";
 								if RC_CNT >= unsigned(SPR_Y) and RC_CNT <= unsigned(SPR_Y) + unsigned(SPR_H) then
@@ -888,7 +927,14 @@ begin
 								end if; 
 							end if; 
 							
-							if SM = "01" and SPR.CG = '0' then
+							if (SM = "01" and SPR.PC(0) = '1') then		-- when it's 4-color mode
+																						-- then if bit 0 of SATB sprint pattern address = '1', then switch SG0/SG1 slot to SG2/SG3						
+
+								SPR_TILE_P0 <= SPR_CH2;
+								SPR_TILE_P1 <= RAM_DI;
+								SPR_TILE_P2 <= (others=>'0');
+								SPR_TILE_P3 <= (others=>'0');
+							elsif SM = "01" and SPR.CG = '0' then
 								SPR_TILE_P0 <= SPR_CH0;
 								SPR_TILE_P1 <= RAM_DI;
 								SPR_TILE_P2 <= (others=>'0');
@@ -920,7 +966,7 @@ begin
 				end if;
 			end if; 
 			
-			if A = "00" and CS_N = '0' and RD_N = '0' and CPU_CE = '1' then
+			if CS_N = '0' and RD_N = '0' and CPU_CE = '1' and A(1) = '0' and (BYTEWORD = '0' or A(0) = '0') then
 				IRQ_OVF <= '0';						
 			end if; 
 		end if;
@@ -976,7 +1022,7 @@ begin
 				if TILE_CNT = HDS_END_POS and DOT_CNT = 7 then
 					SPR_OUT_X <= (others=>'0');
 					SPR_LINE_CLR <= '1';
-				elsif TILE_CNT = HDISP_END_POS and DOT_CNT = 7 then
+				elsif (TILE_CNT = HDISP_END_POS and DOT_CNT = 7) or (DOT_CNT = 7 and TILE_CNT = 0 and DISP_BREAK_LATCH = '1') then
 					SPR_LINE_CLR <= '0';
 				end if;
 				
@@ -988,7 +1034,7 @@ begin
 				end if;
 			end if;
 			
-			if A = "00" and CS_N = '0' and RD_N = '0' and CPU_CE = '1' then
+			if CS_N = '0' and RD_N = '0' and CPU_CE = '1' and A(1) = '0' and (BYTEWORD = '0' or A(0) = '0') then
 				IRQ_COL <= '0';
 			end if; 
 		end if;
@@ -1040,7 +1086,7 @@ begin
 				BORD(7) <= '1';
 				GRID_BG(7) <= '0';
 				GRID_SP(7) <= '0';
-				if HS_F = '1' then
+				if HSYNC_F = '1' then
 					BG_OUT_X <= (others=>'0');
 				elsif BG_OUT = '1' and VDISP = '1' then
 					PX := not (("0"&BG_OUT_X(2 downto 0)) + ("0"&unsigned(OFS_X(2 downto 0))));
@@ -1129,85 +1175,118 @@ begin
 			BYRH_SET <= '0';
 			VDISP_OLD <= '0';
 		elsif rising_edge(CLK) then
+			IO_BYRL_WR <= '0';
+			IO_BYRH_WR <= '0';
 			if CS_N = '0' and WR_N = '0' and CPU_CE = '1' then
-				case A is
-					when "00" =>
-						AR <= DI(4 downto 0);
-						
-					when "10" =>
-						case AR is
-							when "00000" =>
-								REGS(0)(7 downto 0) <= DI;
-							when "00001" =>
-								if CPU_BUSY = '0' then
-									REGS(1)(7 downto 0) <= DI;
-								end if;
-							when "00010" =>
-								if CPU_BUSY = '0' then
-									REGS(2)(7 downto 0) <= DI;
-								end if;
-							when "01000" =>
-								IO_BYRL_SET <= '1';
-							when others => null;
-						end case;
-						if AR >= "00011" then
-							REGS(to_integer(unsigned(AR)))(7 downto 0) <= DI;
+				case A(1) is
+					when '0' =>
+						if (BYTEWORD = '0' or A(0) = '0') then		-- if 16-bit access or 8-bit access to "00"
+							AR <= DI(4 downto 0);
 						end if;
 						
-					when "11" =>
+					when '1' =>
 						case AR is
 							when "00000" =>
-								REGS(0)(15 downto 8) <= DI;
+								if BYTEWORD = '0' then
+									REGS(0)(15 downto 0) <= DI(15 downto 0);
+								elsif A(0) = '0' then
+									REGS(0)(7 downto 0) <= DI(7 downto 0);
+								else
+									REGS(0)(15 downto 8) <= DI(7 downto 0);
+								end if;
 							when "00001" =>
 								if CPU_BUSY = '0' then
-									REGS(1)(15 downto 8) <= DI;
-									CPURD_PEND <= '1';
-									CPU_BUSY <= '1';
+									if BYTEWORD = '0' then
+										REGS(1)(15 downto 0) <= DI(15 downto 0);
+										CPURD_PEND <= '1';
+										CPU_BUSY <= '1';
+									elsif A(0) = '0' then
+										REGS(1)(7 downto 0) <= DI(7 downto 0);
+									else
+										REGS(1)(15 downto 8) <= DI(7 downto 0);
+										CPURD_PEND <= '1';
+										CPU_BUSY <= '1';
+									end if;
 								end if;
 							when "00010" =>
 								if CPU_BUSY = '0' then
-									REGS(2)(15 downto 8) <= DI;
-									CPUWR_PEND <= '1';
-									CPU_BUSY <= '1';
+									if BYTEWORD = '0' then
+										REGS(2)(15 downto 0) <= DI(15 downto 0);
+										CPUWR_PEND <= '1';
+										CPU_BUSY <= '1';
+									elsif A(0) = '0' then
+										REGS(2)(7 downto 0) <= DI(7 downto 0);
+									else
+										REGS(2)(15 downto 8) <= DI(7 downto 0);
+										CPUWR_PEND <= '1';
+										CPU_BUSY <= '1';
+									end if;
 								end if;
 							when "01000" =>
-								IO_BYRH_SET <= '1';
+								if BYTEWORD = '0' then
+									IO_BYRL_WR <= '1';
+									IO_BYRH_WR <= '1';
+								elsif A(0) = '0' then
+									IO_BYRL_WR <= '1';
+								else
+									IO_BYRH_WR <= '1';
+								end if;
 							when "10010" =>
-								DMA_PEND <= '1';
+								if (BYTEWORD = '0' or A(0) = '1') then	-- if 16-bit access or 8-bit access to "11"
+									DMA_PEND <= '1';
+								end if;
 							when "10011" =>
-								DMAS_PEND <= '1';
+								if (BYTEWORD = '0' or A(0) = '1') then	-- if 16-bit access or 8-bit access to "11"
+									DMAS_PEND <= '1';
+								end if;
 							when others => null;
 						end case;
 						if AR >= "00011" then
-							REGS(to_integer(unsigned(AR)))(15 downto 8) <= DI;
+							if BYTEWORD = '0' then
+								REGS(to_integer(unsigned(AR)))(15 downto 0) <= DI(15 downto 0);
+							elsif A(0) = '0' then
+								REGS(to_integer(unsigned(AR)))(7 downto 0) <= DI(7 downto 0);
+							else
+								REGS(to_integer(unsigned(AR)))(15 downto 8) <= DI(7 downto 0);
+							end if;
 						end if;
 						
 					when others => null;
 				end case;
 			elsif CS_N = '0' and RD_N = '0' and CPU_CE = '1' then
-				case A is
-					when "00" =>
-						if SR_LATCH(5) = '1' then
-							IRQ_VBL <= '0';	
+				case A(1) is
+					when '0' =>
+						if (BYTEWORD = '0' or A(0) = '0') then		-- if 16-bit access or 8-bit access to "00"
+							if SR_LATCH(5) = '1' then
+								IRQ_VBL <= '0';	
+							end if;
+							if SR_LATCH(4) = '1' then
+								IRQ_DMA <= '0';
+							end if;
+							if SR_LATCH(3) = '1' then
+								IRQ_DMAS <= '0';
+							end if;
+							if SR_LATCH(2) = '1' then
+								IRQ_RCR <= '0';
+							end if;
 						end if;
-						if SR_LATCH(4) = '1' then
-							IRQ_DMA <= '0';
-						end if;
-						if SR_LATCH(3) = '1' then
-							IRQ_DMAS <= '0';
-						end if;
-						if SR_LATCH(2) = '1' then
-							IRQ_RCR <= '0';
-						end if;
-					when "10" =>
-					when "11" =>
-						if AR = "0" & x"2" then
-							CPURD_PEND <= '1';
-							CPU_BUSY <= '1';						
+					when '1' =>
+						if (BYTEWORD = '0' or A(0) = '1') then		-- if 16-bit access or 8-bit access to "11"
+							if AR = "0" & x"2" then
+								CPURD_PEND <= '1';
+								CPU_BUSY <= '1';						
+							end if;
 						end if;
 					when others => null;
 				end case;
 			end if; 
+			
+			if IO_BYRL_WR = '1' then
+				IO_BYRL_SET <= '1';
+			end if; 
+			if IO_BYRH_WR = '1' then
+				IO_BYRH_SET <= '1';
+			end if;
 			
 			if DCK_CE = '1' then
 				if DOT_CNT(0) = '1' then
@@ -1318,20 +1397,29 @@ begin
 					IRQ_RCR <= '1';
 				end if;
 				
-				--sync BYRx latches to dot clock
-				if IO_BYRL_SET = '1' then
-					IO_BYRL_SET <= '0';
-					BYRL_SET <= '1';
-				end if;
-				if IO_BYRH_SET = '1' then
-					IO_BYRH_SET <= '0';
-					BYRH_SET <= '1';
-				end if;
+				if TILE_CNT = HDS_END_POS - 3 and DOT_CNT = 7 then
+					BXR_SET <= '1';
+				else 
+					BXR_SET <= '0';
+				end if; 
 				
 				if TILE_CNT = HDS_END_POS - 3 and DOT_CNT = 7 then
 					BYRL_SET <= '0';
 					BYRH_SET <= '0';
+				end if;
+			end if;
+				
+			if DCK_CE_F = '1' then
+				--sync BYRx latches to dot clock
+				if IO_BYRL_SET = '1' then
+					IO_BYRL_SET <= '0';
+					BYRL_SET <= '1';
 				end if; 
+				
+				if IO_BYRH_SET = '1' then
+					IO_BYRH_SET <= '0';
+					BYRH_SET <= '1';
+				end if;
 			end if;
 		end if;
 	end process;
@@ -1349,16 +1437,17 @@ begin
 		end if;
 	end process;
 
-	process(A, SR_LATCH, VRR)
+	process(A, BYTEWORD, SR_LATCH, VRR)
 	begin
-		DO <= x"00";
-		case A is
-			when "00" =>
-				DO <= "0" & SR_LATCH;
-			when "10" =>
-				DO <= VRR(7 downto 0);
-			when "11" =>
-				DO <= VRR(15 downto 8);
+		DO <= x"0000";
+		case A(1) is
+			when '0' =>
+				DO <= "000000000" & SR_LATCH;
+			when '1' =>
+				DO <= VRR(15 downto 0);
+				if (BYTEWORD = '1' and A(0) = '1') then
+					DO <= "00000000"  & VRR(15 downto 8);
+				end if;
 			when others => null;
 		end case;
 	end process;
@@ -1418,6 +1507,7 @@ begin
 	SPR_HF_DBG <= SPR.HF;
 	SPR_VF_DBG <= SPR.VF;
 	
+	HSW_END_POS_DBG <= HSW_END_POS;
 	HDS_END_POS_DBG <= HDS_END_POS;
 	HDISP_END_POS_DBG <= HDISP_END_POS;
 	HSW_DBG <= HSW;
