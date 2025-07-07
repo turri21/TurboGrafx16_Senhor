@@ -2,8 +2,7 @@
 
 Tested: Working Video 720p, 1080p & Sound
 
-Synthesized with Quartus 23.1
-
+___
 # [TurboGrafx 16 / PC Engine](https://en.wikipedia.org/wiki/TurboGrafx-16) for [MiSTer Platform](https://github.com/MiSTer-devel/Main_MiSTer/wiki) 
 
 ### This is the port of Gregory Estrade's [FPGAPCE](https://github.com/Torlus/FPGAPCE)
