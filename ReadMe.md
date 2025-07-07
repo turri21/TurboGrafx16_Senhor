@@ -2,7 +2,7 @@
 
 Tested: Working Video 720p, 1080p & Sound
 
-Dev notes: All recent updates added except anything regarding the CD part (The latest update breaks CD support. Bonk III CD not working).
+Dev notes: All recent updates added except anything regarding the CD part (The latest update breaks CD support -- Bonk III CD not working).
 
 ___
 # [TurboGrafx 16 / PC Engine](https://en.wikipedia.org/wiki/TurboGrafx-16) for [MiSTer Platform](https://github.com/MiSTer-devel/Main_MiSTer/wiki) 
