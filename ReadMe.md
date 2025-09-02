@@ -1,3 +1,8 @@
+-=(TurboGrafx16_Senhor notes)=-
+
+Tested: Working Video 720p, 1080p & Sound
+
+___
 # [TurboGrafx 16 / PC Engine](https://en.wikipedia.org/wiki/TurboGrafx-16) for [MiSTer Platform](https://github.com/MiSTer-devel/Main_MiSTer/wiki) 
 
 ### This is the port of Gregory Estrade's [FPGAPCE](https://github.com/Torlus/FPGAPCE)
@@ -154,3 +159,4 @@ Enabling this should not interfere with normal operation of games, but will only
 
 ## Download precompiled binaries
 Go to [releases](https://github.com/MiSTer-devel/TurboGrafx16_MiSTer/tree/master/releases) folder. 
+
